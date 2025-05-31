@@ -1,0 +1,9 @@
+torch>=1.7.0
+numpy>=1.19.0
+librosa>=0.8.0
+soundfile>=0.10.0
+pescador>=2.1.0
+requests>=2.25.0
+tqdm>=4.60.0
+scipy>=1.6.0
+matplotlib>=3.3.0 
