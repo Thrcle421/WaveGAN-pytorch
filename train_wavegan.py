@@ -43,6 +43,7 @@ def parse_arguments():
     parser.add_argument('-bo', '--beta-one', dest='beta1', type=float, default=0.5, help='beta_1 ADAM parameter')
     parser.add_argument('-bt', '--beta-two', dest='beta2', type=float, default=0.9, help='beta_2 ADAM parameter')
     parser.add_argument('-v', '--verbose', dest='verbose', action='store_true')
+    parser.add_argument('-nc', '--no-cuda', dest='no_cuda', action='store_true', help='Disable CUDA even if available')
     parser.add_argument('audio_dir', type=str, help='Path to directory containing audio files')
     parser.add_argument('output_dir', type=str, help='Path to directory where model files will be output')
     args = parser.parse_args()
@@ -55,6 +56,17 @@ if __name__ == '__main__':
     init_console_logger(LOGGER, args['verbose'])
 
     LOGGER.info('Initialized logger.')
+    
+    # CUDA setup
+    use_cuda = torch.cuda.is_available() and not args['no_cuda']
+    if use_cuda:
+        LOGGER.info(f'CUDA is available. Using GPU: {torch.cuda.get_device_name(0)}')
+        LOGGER.info(f'GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.2f} GB')
+        if args['ngpus'] > 1:
+            LOGGER.info(f'Using {args["ngpus"]} GPUs')
+    else:
+        LOGGER.warning('CUDA is not available or disabled. Using CPU (training will be slow).')
+        args['ngpus'] = 0
 
     batch_size = args['batch_size']
     latent_dim = args['latent_dim']
@@ -87,6 +99,13 @@ if __name__ == '__main__':
                                      alpha=args['alpha'], shift_factor=args['shift_factor'],
                                      batch_shuffle=args['batch_shuffle'])
 
+    # Print model parameters count
+    gen_params = sum(p.numel() for p in model_gen.parameters())
+    dis_params = sum(p.numel() for p in model_dis.parameters())
+    LOGGER.info(f'Generator parameters: {gen_params:,}')
+    LOGGER.info(f'Discriminator parameters: {dis_params:,}')
+    LOGGER.info(f'Total parameters: {gen_params + dis_params:,}')
+
     LOGGER.info('Starting training...')
     model_gen, model_dis, history, final_discr_metrics, samples = train_wgan(
         model_gen=model_gen,
@@ -102,7 +121,7 @@ if __name__ == '__main__':
         beta_1=args['beta1'],
         beta_2=args['beta2'],
         lmbda=args['lmbda'],
-        use_cuda=ngpus>=1,
+        use_cuda=use_cuda,
         discriminator_updates=args['discriminator_updates'],
         latent_dim=latent_dim,
         epochs_per_sample=args['epochs_per_sample'],

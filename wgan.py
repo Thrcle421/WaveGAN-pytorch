@@ -123,9 +123,28 @@ def train_wgan(model_gen, model_dis, train_gen, valid_data, test_data,
                lmbda=0.1, use_cuda=True, discriminator_updates=5, epochs_per_sample=10,
                sample_size=20, lr=1e-4, beta_1=0.5, beta_2=0.9, latent_dim=100):
 
-    if use_cuda:
-        model_gen = model_gen.cuda()
-        model_dis = model_dis.cuda()
+    # 设置设备和显示GPU信息
+    device = torch.device("cuda" if use_cuda and torch.cuda.is_available() else "cpu")
+    
+    if device.type == 'cuda':
+        LOGGER.info(f"Using GPU: {torch.cuda.get_device_name(device)}")
+        # 在训练前先清理缓存
+        torch.cuda.empty_cache()
+        # 初始记录内存状态
+        LOGGER.info(f"GPU memory allocated: {torch.cuda.memory_allocated()/1024**2:.2f} MB")
+        LOGGER.info(f"GPU memory reserved: {torch.cuda.memory_reserved()/1024**2:.2f} MB")
+    else:
+        LOGGER.info("Using CPU")
+    
+    # 移动模型到适当的设备
+    model_gen = model_gen.to(device)
+    model_dis = model_dis.to(device)
+    
+    # 使用DataParallel进行多GPU训练（如果可用）
+    if device.type == 'cuda' and torch.cuda.device_count() > 1:
+        LOGGER.info(f"Using {torch.cuda.device_count()} GPUs!")
+        model_gen = torch.nn.DataParallel(model_gen)
+        model_dis = torch.nn.DataParallel(model_dis)
 
     # Initialize optimizers for each model
     optimizer_gen = optim.Adam(model_gen.parameters(), lr=lr,
@@ -135,8 +154,7 @@ def train_wgan(model_gen, model_dis, train_gen, valid_data, test_data,
 
     # Sample noise used for seeing the evolution of generated output samples throughout training
     sample_noise = torch.Tensor(sample_size, latent_dim).uniform_(-1, 1)
-    if use_cuda:
-        sample_noise = sample_noise.cuda()
+    sample_noise = sample_noise.to(device)
     sample_noise_v = autograd.Variable(sample_noise)
 
     samples = {}
@@ -148,9 +166,14 @@ def train_wgan(model_gen, model_dis, train_gen, valid_data, test_data,
 
     # Loop over the dataset multiple times
     for epoch in range(num_epochs):
-        LOGGER.info("Epoch: {}/{}".format(epoch + 1, num_epochs))
+        LOGGER.info(f"Epoch: {epoch + 1}/{num_epochs}")
 
         epoch_history = []
+        
+        # 记录每个epoch的GPU内存使用情况
+        if device.type == 'cuda':
+            LOGGER.info(f"GPU memory allocated: {torch.cuda.memory_allocated()/1024**2:.2f} MB")
+            LOGGER.info(f"GPU memory reserved: {torch.cuda.memory_reserved()/1024**2:.2f} MB")
 
         for batch_idx in range(batches_per_epoch):
 
@@ -172,9 +195,7 @@ def train_wgan(model_gen, model_dis, train_gen, valid_data, test_data,
 
                 # Get noise
                 noise = torch.Tensor(batch_size, latent_dim).uniform_(-1, 1)
-                if use_cuda:
-                    noise = noise.cuda()
-                # Remove volatile parameter (deprecated) and use with torch.no_grad() instead
+                noise = noise.to(device)
                 noise_v = autograd.Variable(noise)
 
                 # Get new batch of real training data
@@ -191,18 +212,17 @@ def train_wgan(model_gen, model_dis, train_gen, valid_data, test_data,
                     latent_dim,
                     lmbda, use_cuda, compute_grads=False)
 
-                if use_cuda:
-                    D_cost_train = D_cost_train.cpu()
-                    D_cost_valid = D_cost_valid.cpu()
-                    D_wass_train = D_wass_train.cpu()
-                    D_wass_valid = D_wass_valid.cpu()
+                # Move tensors to CPU for logging
+                D_cost_train_cpu = D_cost_train.cpu()
+                D_cost_valid_cpu = D_cost_valid.cpu()
+                D_wass_train_cpu = D_wass_train.cpu()
+                D_wass_valid_cpu = D_wass_valid.cpu()
 
-                # Fix tensor access - use .item() instead of deprecated array access
                 batch_history['discriminator'].append({
-                    'cost': D_cost_train.data.item(),
-                    'wasserstein_cost': D_wass_train.data.item(),
-                    'cost_validation': D_cost_valid.data.item(),
-                    'wasserstein_cost_validation': D_wass_valid.data.item()
+                    'cost': D_cost_train_cpu.item(),
+                    'wasserstein_cost': D_wass_train_cpu.item(),
+                    'cost_validation': D_cost_valid_cpu.item(),
+                    'wasserstein_cost_validation': D_wass_valid_cpu.item()
                 })
 
             ############################
@@ -221,12 +241,11 @@ def train_wgan(model_gen, model_dis, train_gen, valid_data, test_data,
             # Update the generator
             optimizer_gen.step()
 
-            if use_cuda:
-                G_cost = G_cost.cpu()
+            # Move to CPU for logging
+            G_cost_cpu = G_cost.cpu()
 
-            # Fix tensor access - use .item() instead of deprecated array access
             batch_history['generator'] = {
-                'cost': G_cost.data.item()
+                'cost': G_cost_cpu.item()
             }
 
             epoch_history.append(batch_history)
@@ -237,8 +256,9 @@ def train_wgan(model_gen, model_dis, train_gen, valid_data, test_data,
         if epoch % epochs_per_sample == 0:
             model_gen.eval()
             # Generate samples for inspection
-            sample_out = model_gen(sample_noise_v)
-            samples[epoch] = sample_out.data.cpu().numpy()
+            with torch.no_grad():
+                sample_out = model_gen(sample_noise_v)
+            samples[epoch] = sample_out.cpu().numpy()
 
             if output_dir is not None:
                 save_samples(samples[epoch], epoch, output_dir)
@@ -247,59 +267,12 @@ def train_wgan(model_gen, model_dis, train_gen, valid_data, test_data,
             model_gen.train()
 
     LOGGER.info("Training complete")
+    
+    # 清理缓存
+    if device.type == 'cuda':
+        torch.cuda.empty_cache()
 
-    # Evaluate and save
-    model_dis.eval()
-    model_gen.eval()
-
-    valid_data_v = np_to_input_var(valid_data['X'], use_cuda)
-    test_data_v = np_to_input_var(test_data['X'], use_cuda)
-
-    # Compute final discriminator metrics
-    final_discr_metrics = {}
-
-    # Valid metrics
-    valid_batch_size = min(valid_data['X'].shape[0], batch_size)
-    # Generate noise that matches the validation batch size
-    valid_noise = torch.Tensor(valid_batch_size, latent_dim).uniform_(-1, 1)
-    if use_cuda:
-        valid_noise = valid_noise.cuda()
-    valid_noise_v = autograd.Variable(valid_noise)
-
-    D_cost_valid, D_wass_valid = compute_discr_loss_terms(
-        model_dis, model_gen, valid_data_v[:valid_batch_size], valid_noise_v,
-        valid_batch_size, latent_dim,
-        lmbda, use_cuda, compute_grads=False)
-
-    if use_cuda:
-        D_cost_valid = D_cost_valid.cpu()
-        D_wass_valid = D_wass_valid.cpu()
-
-    final_discr_metrics['valid'] = {
-        'cost': D_cost_valid.data.item(),
-        'wasserstein_cost': D_wass_valid.data.item()
-    }
-
-    # Test metrics
-    test_batch_size = min(test_data['X'].shape[0], batch_size)
-    # Generate noise that matches the test batch size
-    test_noise = torch.Tensor(test_batch_size, latent_dim).uniform_(-1, 1)
-    if use_cuda:
-        test_noise = test_noise.cuda()
-    test_noise_v = autograd.Variable(test_noise)
-
-    D_cost_test, D_wass_test = compute_discr_loss_terms(
-        model_dis, model_gen, test_data_v[:test_batch_size], test_noise_v,
-        test_batch_size, latent_dim,
-        lmbda, use_cuda, compute_grads=False)
-
-    if use_cuda:
-        D_cost_test = D_cost_test.cpu()
-        D_wass_test = D_wass_test.cpu()
-
-    final_discr_metrics['test'] = {
-        'cost': D_cost_test.data.item(),
-        'wasserstein_cost': D_wass_test.data.item()
-    }
-
-    return model_gen, model_dis, history, final_discr_metrics, samples
+    return model_gen, model_dis, history, {
+        'valid_wasserstein_cost': D_wass_valid_cpu.item(),
+        'valid_cost': D_cost_valid_cpu.item()
+    }, samples

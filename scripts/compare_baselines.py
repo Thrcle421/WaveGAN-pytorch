@@ -52,11 +52,19 @@ def load_audio_samples(directory, max_samples=20, sample_rate=16000):
     audio_extensions = ['.wav', '.mp3', '.flac', '.ogg']
     audio_files = []
 
+    # Look in the main directory
     for ext in audio_extensions:
         audio_files.extend(list(Path(directory).glob(f"*{ext}")))
 
+    # Also check in the 'samples' subdirectory if it exists
+    samples_dir = os.path.join(directory, 'samples')
+    if os.path.exists(samples_dir) and os.path.isdir(samples_dir):
+        logger.info(f"Also checking samples subdirectory: {samples_dir}")
+        for ext in audio_extensions:
+            audio_files.extend(list(Path(samples_dir).glob(f"*{ext}")))
+
     if not audio_files:
-        raise FileNotFoundError(f"No audio files found in {directory}")
+        raise FileNotFoundError(f"No audio files found in {directory} or its samples subdirectory")
 
     # Randomly select files if there are more than max_samples
     if len(audio_files) > max_samples:

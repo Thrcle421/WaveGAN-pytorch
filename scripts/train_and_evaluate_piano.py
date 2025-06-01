@@ -159,23 +159,22 @@ def generate_samples(model_dir, output_dir, num_samples, sample_rate):
     """
     logger.info(f"Generating {num_samples} audio samples...")
 
-    # Create output directory
-    samples_dir = os.path.join(output_dir, 'samples')
-    os.makedirs(samples_dir, exist_ok=True)
+    # Create output directory for samples (no longer creating a 'samples' subdirectory)
+    os.makedirs(output_dir, exist_ok=True)
 
     # Run our custom generation script instead of generate_music.py
     cmd = [
         sys.executable, 'scripts/generate_piano_samples.py',
         '--model_dir', model_dir,
-        '--output_dir', samples_dir,
+        '--output_dir', output_dir,
         '--num_samples', str(num_samples),
         '--sample_rate', str(sample_rate)
     ]
 
     run_command(cmd, "Generate audio samples")
 
-    logger.info(f"Samples generated and saved to {samples_dir}")
-    return samples_dir
+    logger.info(f"Samples generated and saved to {output_dir}")
+    return output_dir
 
 
 def run_objective_evaluation(model_dir, dataset_dir, output_dir, max_samples, sample_rate):

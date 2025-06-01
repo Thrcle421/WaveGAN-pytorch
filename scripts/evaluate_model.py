@@ -52,11 +52,19 @@ def load_audio_samples(directory, max_samples=100, sample_rate=16000):
     audio_extensions = ['.wav', '.mp3', '.flac', '.ogg']
     audio_files = []
 
+    # Look in the main directory
     for ext in audio_extensions:
         audio_files.extend(list(Path(directory).glob(f"*{ext}")))
 
+    # Also check in the 'samples' subdirectory if it exists
+    samples_dir = os.path.join(directory, 'samples')
+    if os.path.exists(samples_dir) and os.path.isdir(samples_dir):
+        logger.info(f"Also checking samples subdirectory: {samples_dir}")
+        for ext in audio_extensions:
+            audio_files.extend(list(Path(samples_dir).glob(f"*{ext}")))
+
     if not audio_files:
-        raise FileNotFoundError(f"No audio files found in {directory}")
+        raise FileNotFoundError(f"No audio files found in {directory} or its samples subdirectory")
 
     # Randomly select files if there are more than max_samples
     if len(audio_files) > max_samples:
@@ -138,16 +146,43 @@ def calculate_fad(real_features, generated_features):
     mean_diff = real_mean - gen_mean
     mean_term = np.sum(mean_diff ** 2)
 
-    # Handle numerical stability
-    eps = 1e-6
+    # Handle numerical stability with a larger epsilon
+    eps = 1e-3
     real_cov = real_cov + np.eye(real_cov.shape[0]) * eps
     gen_cov = gen_cov + np.eye(gen_cov.shape[0]) * eps
 
-    # Calculate the matrix square root term
-    cov_term = np.trace(real_cov + gen_cov -
-                        2 * np.sqrt(np.matmul(real_cov, gen_cov)))
+    # A more stable way to calculate the square root term
+    # Based on the implementation in scipy.linalg.sqrtm
+    try:
+        # Calculate product of covariances with improved numerical stability
+        covmean_sq = np.matmul(real_cov, gen_cov)
+        # Make sure it's symmetric for numerical stability
+        covmean_sq = (covmean_sq + covmean_sq.T) / 2.0
+
+        # If the product is positive definite, we can compute the square root
+        if np.all(np.linalg.eigvals(covmean_sq) > 0):
+            sqrt_covmean = np.sqrt(covmean_sq)
+        else:
+            # Otherwise, use the more robust but slower scipy.linalg.sqrtm
+            import scipy.linalg
+            sqrt_covmean = scipy.linalg.sqrtm(covmean_sq)
+            
+            # Check if sqrtm returned complex values due to numerical errors
+            if np.iscomplexobj(sqrt_covmean):
+                logger.warning("FAD calculation produced complex values, taking real part.")
+                sqrt_covmean = sqrt_covmean.real
+
+        # Calculate the trace term
+        cov_term = np.trace(real_cov) + np.trace(gen_cov) - 2 * np.trace(sqrt_covmean)
+    except Exception as e:
+        logger.warning(f"Error in FAD calculation: {e}. Using fallback method.")
+        # Fallback to a simpler approximation
+        cov_term = np.trace(real_cov) + np.trace(gen_cov)
 
     fad = mean_term + cov_term
+    
+    # Ensure FAD is non-negative
+    fad = max(0.0, fad)
 
     logger.info(f"FAD: {fad:.4f}")
     return fad

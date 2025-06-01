@@ -73,13 +73,25 @@ def get_all_audio_filepaths(audio_dir):
 def create_data_split(audio_filepath_list, valid_ratio, test_ratio,
                       train_batch_size, valid_size, test_size):
     num_files = len(audio_filepath_list)
-    num_valid = int(np.ceil(num_files * valid_ratio))
-    num_test = int(np.ceil(num_files * test_ratio))
+    
+    # Ensure we have at least 1 file for each split
+    min_valid = max(1, int(np.ceil(num_files * valid_ratio)))
+    min_test = max(1, int(np.ceil(num_files * test_ratio)))
+    
+    # Ensure we don't try to use more files than we have
+    if min_valid + min_test >= num_files:
+        # Adjust to ensure at least 1 training sample
+        min_valid = max(1, min(min_valid, int(num_files * 0.2)))
+        min_test = max(1, min(min_test, int(num_files * 0.1)))
+    
+    num_valid = min_valid
+    num_test = min_test
     num_train = num_files - num_valid - num_test
-
-    assert num_valid > 0
-    assert num_test > 0
-    assert num_train > 0
+    
+    # Ensure we have at least 1 sample for each split
+    assert num_valid > 0, f"No validation samples (total files: {num_files}, valid_ratio: {valid_ratio})"
+    assert num_test > 0, f"No test samples (total files: {num_files}, test_ratio: {test_ratio})"
+    assert num_train > 0, f"No training samples (total files: {num_files}, after valid: {num_valid}, test: {num_test})"
 
     valid_files = audio_filepath_list[:num_valid]
     test_files = audio_filepath_list[num_valid:num_valid + num_test]
